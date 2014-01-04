@@ -1,6 +1,12 @@
-(ns pbf-reader.core)
+(ns pbf-reader.core
+  (:use clj-configurator.core))
 
-(defn foo
-  "I don't do a whole lot."
-  [x]
-  (println x "Hello, World!"))
+(defconfig settings
+  :defaults {:pbf-dir "resources"})
+
+(def files (file-seq (clojure.java.io/file (:pbf-dir settings))))
+
+(defn -main []
+  (prn settings)
+  (prn (:pbf-dir settings))
+  (prn files))
