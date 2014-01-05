@@ -1,12 +1,16 @@
 (ns pbf-reader.core
-  (:use clj-configurator.core))
+  (:use [clojure.java.io :only [input-stream]])
+  (:require [clj-configurator.core :as conf]))
 
-(defconfig settings
+(conf/defconfig settings
   :defaults {:pbf-dir "resources"})
 
-(def files (file-seq (clojure.java.io/file (:pbf-dir settings))))
+(def pbf-files
+  (filter
+    #(re-find #"\.osm\.pbf$" (.getName %))
+    (file-seq (clojure.java.io/file (:pbf-dir settings)))))
 
 (defn -main []
-  (prn settings)
-  (prn (:pbf-dir settings))
-  (prn files))
+  (doseq [pbf pbf-files]
+    (with-open [file-stream (input-stream pbf)]
+      (prn file-stream))))
