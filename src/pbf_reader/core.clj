@@ -1,5 +1,5 @@
 (ns pbf-reader.core
-  (:import (crosby.binary Osmformat$HeaderBlock Fileformat$BlobHeader Fileformat$Blob)
+  (:import (crosby.binary Osmformat$HeaderBlock Fileformat$BlobHeader Fileformat$Blob Osmformat$PrimitiveBlock)
            (java.util.zip Inflater))
   (:use [clojure.java.io :only [input-stream]]
         [clj-configurator.core :only [defconfig]])
@@ -10,9 +10,10 @@
 (defconfig settings
   :defaults {:pbf-dir "resources"})
 
-(def BlobHeader  (buf/protodef Fileformat$BlobHeader))
-(def Blob        (buf/protodef Fileformat$Blob))
-(def HeaderBlock (buf/protodef Osmformat$HeaderBlock))
+(def BlobHeader     (buf/protodef Fileformat$BlobHeader))
+(def Blob           (buf/protodef Fileformat$Blob))
+(def HeaderBlock    (buf/protodef Osmformat$HeaderBlock))
+(def PrimitiveBlock (buf/protodef Osmformat$PrimitiveBlock))
 
 ;; All credit for this function goes to pingles
 (defn- bytes->int
@@ -42,6 +43,7 @@
       bytes)))
 
 (defn- parse-file [stream]
+  ;; TODO: check size of blobs
   (when-let       [header-size (get-bytes stream 4)]
     (when-let     [header      (get-bytes stream (bytes->int header-size))]
       (let        [blob-header (buf/protobuf-load BlobHeader header)]
@@ -55,10 +57,30 @@
     (.inflate  inflater output)
     output))
 
+(defn- type->blockname [type]
+  (cond
+    (= type "OSMHeader") HeaderBlock
+    (= type "OSMData")   PrimitiveBlock))
+
+(defn- blob->block [blob type]
+  (when-let [blockname (type->blockname type)]
+    (buf/protobuf-load blockname (zlib-unpack (.toByteArray (:zlib-data blob)) (:raw-size blob)))))
+
 (defn -main []
   (doseq [pbf pbf-files]
     (with-open [pbf-stream  (input-stream pbf)]
-      (let [tmp (parse-file pbf-stream)
-            blob-header (:blob-header tmp)
-            blob (:blob tmp)]
-        (prn (buf/protobuf-load HeaderBlock (zlib-unpack (.toByteArray (:zlib-data blob)) (:raw-size blob))))))))
+      (loop [sequence (parse-file pbf-stream)
+             ;; just for tests
+             n 1]
+        (when sequence
+          (let [blob-header (:blob-header sequence)
+                blob (:blob sequence)
+                type (:type blob-header)
+                block (blob->block blob type)]
+            ;; just for tests
+            (prn blob-header)
+            (prn blob)
+            (prn block))
+          ;; just for tests
+          (when (> n 0)
+            (recur (parse-file pbf-stream) (- n 1))))))))
