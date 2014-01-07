@@ -36,15 +36,17 @@
         read (.read stream bytes 0 count-bytes)]
     (= count-bytes read)))
 
+(defn- get-bytes [stream num-of-bytes]
+  (let [bytes (byte-array num-of-bytes)]
+    (when (fill-bytes! stream bytes)
+      bytes)))
+
 (defn- parse-file [stream]
-  (let [header-size (byte-array 4)]
-    (when (fill-bytes! stream header-size)
-      (let [header (byte-array (bytes->int header-size))]
-        (when (fill-bytes! stream header)
-          (let [blob-header (buf/protobuf-load BlobHeader header)
-                blob-size   (byte-array (:datasize blob-header))]
-            (when (fill-bytes! stream blob-size)
-              {:blob-header blob-header :blob (buf/protobuf-load Blob blob-size)})))))))
+  (when-let       [header-size (get-bytes stream 4)]
+    (when-let     [header      (get-bytes stream (bytes->int header-size))]
+      (let        [blob-header (buf/protobuf-load BlobHeader header)]
+        (when-let [blob-size   (get-bytes stream (:datasize blob-header))]
+          {:blob-header blob-header :blob (buf/protobuf-load Blob blob-size)})))))
 
 (defn- zlib-unpack [input size]
   (let [inflater (Inflater.)
