@@ -78,7 +78,7 @@
 (defn- decode-lat-lon [value offset granularity]
   (* 0.000000001 (+ offset (* granularity value))))
 
-(defn- decode-keys-vals [keys-vals strings]
+(defn- decode-dense-tags [keys-vals strings]
   (loop [keys {}
          keys-vals keys-vals]
     (if (>= (count keys-vals) 2)
@@ -88,12 +88,44 @@
           [keys (into rest [val])]))
       [keys keys-vals])))
 
+(defn- decode-tags [keys vals strings]
+  (loop [tags {}
+         ks keys
+         vs vals]
+    (if ks
+      (let [[k & ks-rest] ks
+            [v & vs-rest] vs]
+        (recur (assoc tags (get strings k) (get strings v)) ks-rest vs-rest))
+      tags)))
+
+(defn- decode-refs [refs]
+  (loop [decoded-refs []
+         base 0
+         rs refs]
+    (if rs
+      (let [[r & rs-rest] rs
+            ref (+ base r)]
+        (recur (conj decoded-refs ref) ref rs-rest))
+      decoded-refs)))
+
+(defn- decode-rel-refs [role-sids member-ids types strings]
+  (loop [r-sids role-sids
+         m-ids member-ids
+         ts types
+         base-m-id 0
+         refs []]
+    (if ts
+      (let [[r & rs-rest] r-sids
+            [m & ms-rest] m-ids
+            [t & ts-rest] ts
+            m-id (+ base-m-id m)]
+        (recur rs-rest ms-rest ts-rest m-id (conj refs {:role (get strings r) :type t :id m-id})))
+      refs)))
+
 (defn -main []
   (doseq [pbf pbf-files]
     (with-open [pbf-stream  (input-stream pbf)]
-      (loop [sequence (parse-file pbf-stream)
-             ;; just for tests
-             n 1]
+      (loop [sequence (parse-file pbf-stream)]
         (when sequence
           (let [blob-header (:blob-header sequence)
                 blob (:blob sequence)
@@ -117,8 +149,7 @@
                         id  (+ (:id  base) diff-id)
                         lat (+ (:lat base) diff-lat)
                         lon (+ (:lon base) diff-lon)
-                        [tags keys-vals-rest] (decode-keys-vals keys-vals strings)
-                        ;_ (prn (class (:id dense-nodes)))
+                        [tags keys-vals-rest] (decode-dense-tags keys-vals strings)
                         denseinfo (:denseinfo dense-nodes)
                         [version  & rest-versions] (:version   denseinfo)
                         [diff-ts  & rest-ts]       (:timestamp denseinfo)
@@ -138,5 +169,21 @@
                               :denseinfo {:version rest-versions :timestamp rest-ts :changeset rest-cs :uid rest-uid :user_sid rest-sid}}
                              {:id id :lat lat :lon lon :ts ts :cs cs :uid uid :sid sid}
                              nodes)
-                      nodes))))))
-            (recur (parse-file pbf-stream) (- n 1)))))))
+                      nodes))))
+              (when-let [nodes (:nodes group)]
+                (throw (Exception. "TODO: Nodes")))
+              (when-let [ways (:ways group)]
+                (doseq [way ways]
+                  (let [info (:info way)
+                        unpacked-way {:id (:id way) :tags (decode-tags (:keys way) (:vals way) strings) :version (:version info)
+                                      :timestamp (:timestamp info) :changeset (:changeset info) :uid (:uid info)
+                                      :user (get strings (:user-sid info)) :refs (decode-refs (:refs way))}])))
+              (when-let [relations (:relations group)]
+                (doseq [rel relations]
+                  (let [info (:info rel)
+                        unpacked-rel {:id (:id rel) :tags (decode-tags (:keys rel) (:vals rel) strings) :version (:version info)
+                                      :timestamp (:timestamp info) :changeset (:changeset info) :uid (:uid info)
+                                      :user (get strings (:user-sid info)) :refs (decode-rel-refs (:roles-sid rel) (:memids rel) (:types rel) strings)}])))
+              (when-let [changesets (:changesets group)]
+                (throw (Exception. "TODO: changesets")))))
+            (recur (parse-file pbf-stream)))))))
