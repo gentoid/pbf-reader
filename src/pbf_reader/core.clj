@@ -66,6 +66,28 @@
   (when-let [blockname (type->blockname type)]
     (buf/protobuf-load blockname (zlib-unpack (.toByteArray (:zlib-data blob)) (:raw-size blob)))))
 
+(defn- string-table->strings [byte-strings]
+  (when byte-strings
+    (loop [[first & rest] byte-strings
+           init-strings []]
+      (let [strings (conj init-strings (.toStringUtf8 first))]
+        (if rest
+          (recur rest strings)
+          strings)))))
+
+(defn- decode-lat-lon [value offset granularity]
+  (* 0.000000001 (+ offset (* granularity value))))
+
+(defn- decode-keys-vals [keys-vals strings]
+  (loop [keys {}
+         keys-vals keys-vals]
+    (if (>= (count keys-vals) 2)
+      (let [[key val & rest] keys-vals]
+        (if (> key 0)
+          (recur (assoc keys (get strings key) (get strings val)) rest)
+          [keys (into rest [val])]))
+      [keys keys-vals])))
+
 (defn -main []
   (doseq [pbf pbf-files]
     (with-open [pbf-stream  (input-stream pbf)]
@@ -76,11 +98,45 @@
           (let [blob-header (:blob-header sequence)
                 blob (:blob sequence)
                 type (:type blob-header)
-                block (blob->block blob type)]
-            ;; just for tests
-            (prn blob-header)
-            (prn blob)
-            (prn block))
-          ;; just for tests
-          (when (> n 0)
-            (recur (parse-file pbf-stream) (- n 1))))))))
+                block (blob->block blob type)
+                granularity (:granularity block)
+                lat_offset (:lat_offset block)
+                lon_offset (:lon_offset block)
+                date_granularity (:date_granularity block)
+                strings (string-table->strings (:s (:stringtable block)))
+                primitive-groups (:primitivegroup block)]
+            (doseq [group primitive-groups]
+              (when-let [dense-nodes (:dense group)]
+                (loop [dense-nodes dense-nodes
+                       base {:id 0 :lat 0 :lon 0 :ts 0 :cs 0 :uid 0 :sid 0}
+                       init-nodes []]
+                  (let [[diff-id  & rest-ids] (:id  dense-nodes)
+                        [diff-lat & rest-lat] (:lat dense-nodes)
+                        [diff-lon & rest-lon] (:lon dense-nodes)
+                        keys-vals (:keys_vals dense-nodes)
+                        id  (+ (:id  base) diff-id)
+                        lat (+ (:lat base) diff-lat)
+                        lon (+ (:lon base) diff-lon)
+                        [tags keys-vals-rest] (decode-keys-vals keys-vals strings)
+                        ;_ (prn (class (:id dense-nodes)))
+                        denseinfo (:denseinfo dense-nodes)
+                        [version  & rest-versions] (:version   denseinfo)
+                        [diff-ts  & rest-ts]       (:timestamp denseinfo)
+                        [diff-cs  & rest-cs]       (:changeset denseinfo)
+                        [diff-uid & rest-uid]      (:uid       denseinfo)
+                        [diff-sid & rest-sid]      (:user_sid  denseinfo)
+                        ts  (+ (:ts  base) diff-ts)
+                        cs  (+ (:cs  base) diff-cs)
+                        uid (+ (:uid base) diff-uid)
+                        sid (+ (:sid base) diff-sid)
+                        node {:id id :lat (decode-lat-lon lat lat_offset granularity)
+                                     :lon (decode-lat-lon lon lon_offset granularity)
+                              :tags tags :version version :timestamp ts :changeset cs :uid uid :user (get strings sid)}
+                        nodes (conj init-nodes node)]
+                    (if rest-ids
+                      (recur {:id rest-ids :lat rest-lat :lon rest-lon :keys_vals keys-vals-rest
+                              :denseinfo {:version rest-versions :timestamp rest-ts :changeset rest-cs :uid rest-uid :user_sid rest-sid}}
+                             {:id id :lat lat :lon lon :ts ts :cs cs :uid uid :sid sid}
+                             nodes)
+                      nodes))))))
+            (recur (parse-file pbf-stream) (- n 1)))))))
