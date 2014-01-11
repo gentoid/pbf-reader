@@ -77,16 +77,13 @@
 (defn- decode-lat-lon [value offset granularity]
   (* 0.000000001 (+ offset (* granularity value))))
 
-;; TODO: rewrite it!
-(defn- decode-dense-tags [keys-vals strings]
-  (loop [keys {}
-         keys-vals keys-vals]
-    (if (>= (count keys-vals) 2)
-      (let [[key val & rest] keys-vals]
-        (if (> key 0)
-          (recur (assoc keys (get strings key) (get strings val)) rest)
-          [keys (into rest [val])]))
-      [keys keys-vals])))
+(defn decode-dense-tags [keys-vals strings]
+  (loop [[k v & keys-vals] keys-vals
+         tags '()]
+    (cond
+      (and k (> k 0)) (recur keys-vals (cons [(strings k) (strings v)] tags))
+      k (recur (cons v keys-vals) (cons [] tags))
+      :else tags)))
 
 (defn- decode-tags [keys vals strings]
   (loop [tags {}
@@ -122,48 +119,73 @@
         (recur rs-rest ms-rest ts-rest m-id (conj refs {:role (get strings r) :type t :id m-id})))
       refs)))
 
-(defn- encode-delta [s]
+(defn- decode-delta [s]
   (reverse (reduce #(if (seq? %) (cons (+ %2 (first %)) %)
                                  (cons (+ %2 %) [%])) s)))
 
 (defn- parse-dense [dense strings]
   (let [{:keys [denseinfo keys-vals]} dense
-        ids (encode-delta (:id dense))
-        users (map #(strings %) (encode-delta (:user-sid denseinfo)))
+        ids (decode-delta (:id dense))
+        users (map #(strings %) (decode-delta (:user-sid denseinfo)))
         versions (:version denseinfo)
         tags (decode-dense-tags keys-vals strings)
-        lats () ;; TODO
-        lons () ;; TODO
-        changesets (encode-delta (:changeset denseinfo))
-        timestamps (encode-delta (:timestamp denseinfo))
-        uids (encode-delta (:uid denseinfo))]
-    {:nodes (apply map #(hash-map :id % :user %2 :version %3 :tags %4 :changeset %5 :lat %6 :lon %7 :timestamp %8 :uid %9)
-                   [ids users versions tags changesets lats lons timestamps uids])}))
+        lats (decode-delta (:lat dense))
+        lons (decode-delta (:lon dense))
+        changesets (decode-delta (:changeset denseinfo))
+        timestamps (decode-delta (:timestamp denseinfo))
+        uids (decode-delta (:uid denseinfo))]
+    {:nodes "" #_(apply map #(hash-map :id % :user %2 :tags %3 :version %4 :changeset %5 :lat %6 :lon %7 :timestamp %8 :uid %9)
+                   [ids users tags versions changesets lats lons timestamps uids])}))
+
+(defn parse-ways [ways strings]
+  (let [parse-way (fn [way]
+                    (let [{:keys [id keys vals refs info]} way
+                          {:keys [timestamp changeset version uid user-sid]} info
+                          refs (decode-delta refs)]
+                      {:id id :user (strings user-sid) :tags (decode-tags keys vals strings) :refs refs
+                       :version version :changeset changeset :timestamp timestamp :uid uid}))]
+    {:ways "" #_(map parse-way ways)}))
+
+(defn- parse-relations [relations strings]
+  (let [parse-relation (fn [rel]
+                         (prn rel))]
+    (parse-relation (first relations))))
 
 (defn- parse-group [group block]
   (let [{:keys [granularity lat-offset lon-offset date-granularity primitivegroup]} block
-        {:keys [dense nodes ways relationschangesets]} group
+        {:keys [dense nodes ways relations changesets]} group
         strings (string-table->strings (:s (:stringtable block)))]
     (cond
-      dense (parse-dense dense strings))))
+      dense (parse-dense dense strings)
+      ways (parse-ways ways strings)
+      relations (parse-relations relations strings))))
+
+(defn- parse-chunk [chunk]
+  (let [{:keys [blob-header blob]} chunk
+        type (:type blob-header)
+        block (blob->block blob type)
+        {:keys [primitivegroup]} block]
+    (when primitivegroup
+      (loop [[group & groups] primitivegroup
+             decoded '()]
+        (if group
+          (recur groups (conj decoded (parse-group group block)))
+          decoded)))))
 
 (defn- parse-stream [stream]
-  (loop [chunk (parse-header stream)]
-    (when chunk
-      (let [{:keys [blob-header blob]} chunk
-            type (:type blob-header)
-            block (blob->block blob type)
-            {:keys [primitivegroup]} block]
-        (when primitivegroup
-          (loop [[group & groups] primitivegroup]
-            (when group
-              (conj (parse-group group block) #_(recur groups)))))
-        (recur (parse-header stream))))))
+  (loop [chunk (parse-header stream)
+         decoded []]
+    (if chunk
+      (recur (parse-header stream)
+             (let [chunk (parse-chunk chunk)]
+               (if (empty? chunk)
+                 decoded
+                 (into decoded chunk))))
+      decoded)))
+
+(defn- open-file [file]
+  (with-open [stream (input-stream file)]
+    (parse-stream stream)))
 
 (defn -main []
-  (when pbf-files
-    (loop [[file & rest-files] pbf-files]
-      (with-open [stream (input-stream file)]
-        (parse-stream stream))
-      (when rest-files
-        (recur rest-files)))))
+  (map open-file pbf-files))
