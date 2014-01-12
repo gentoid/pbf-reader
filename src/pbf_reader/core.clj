@@ -120,8 +120,9 @@
       refs)))
 
 (defn- decode-delta [s]
-  (reverse (reduce #(if (seq? %) (cons (+ %2 (first %)) %)
-                                 (cons (+ %2 %) [%])) s)))
+  (reduce #(if (vector? %)
+            (conj % (+ %2 (peek %)))
+            (conj [%] (+ %2 %))) s))
 
 (defn- parse-dense [dense strings]
   (let [{:keys [denseinfo keys-vals]} dense
@@ -134,22 +135,29 @@
         changesets (decode-delta (:changeset denseinfo))
         timestamps (decode-delta (:timestamp denseinfo))
         uids (decode-delta (:uid denseinfo))]
-    {:nodes "" #_(apply map #(hash-map :id % :user %2 :tags %3 :version %4 :changeset %5 :lat %6 :lon %7 :timestamp %8 :uid %9)
+    {:nodes (apply map #(hash-map :id % :user %2 :tags %3 :version %4 :changeset %5 :lat %6 :lon %7 :timestamp %8 :uid %9)
                    [ids users tags versions changesets lats lons timestamps uids])}))
+
+(defn- parse-info [info strings]
+  (let [{:keys [version timestamp changeset uid user-sid]} info]
+    {:user (strings user-sid) :version version :changeset changeset :timestamp timestamp :uid uid}))
 
 (defn parse-ways [ways strings]
   (let [parse-way (fn [way]
                     (let [{:keys [id keys vals refs info]} way
                           {:keys [timestamp changeset version uid user-sid]} info
                           refs (decode-delta refs)]
-                      {:id id :user (strings user-sid) :tags (decode-tags keys vals strings) :refs refs
-                       :version version :changeset changeset :timestamp timestamp :uid uid}))]
-    {:ways "" #_(map parse-way ways)}))
+                      (into {} (concat (parse-info info strings)
+                                       {:id id :tags (decode-tags keys vals strings) :refs refs}))))]
+    {:ways (doall (map parse-way ways))}))
 
 (defn- parse-relations [relations strings]
   (let [parse-relation (fn [rel]
-                         (prn rel))]
-    (parse-relation (first relations))))
+                         (let [{:keys [id keys vals info roles-sid memids types]} rel]
+                           (into {} (concat (parse-info info strings)
+                                            {:id id :tags (decode-tags keys vals strings)
+                                             :refs (decode-rel-refs roles-sid memids types strings)}))))]
+    {:relations (doall (map parse-relation relations))}))
 
 (defn- parse-group [group block]
   (let [{:keys [granularity lat-offset lon-offset date-granularity primitivegroup]} block
@@ -188,4 +196,4 @@
     (parse-stream stream)))
 
 (defn -main []
-  (map open-file pbf-files))
+  (reduce #(concat % %2) (map open-file pbf-files)))
