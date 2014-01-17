@@ -7,7 +7,7 @@
 
 ;; default config
 (defconfig settings
-  :defaults {:pbf-dir "resources"})
+  :defaults {:pbf-dir "/home/viktor/disks/data1/download/pbf/2/"})
 
 (def BlobHeader     (buf/protodef Fileformat$BlobHeader))
 (def Blob           (buf/protodef Fileformat$Blob))
@@ -180,20 +180,17 @@
           (recur groups (conj decoded (parse-group group block)))
           decoded)))))
 
-(defn- parse-stream [stream]
-  (loop [chunk (parse-header stream)
-         decoded []]
-    (if chunk
-      (recur (parse-header stream)
-             (let [chunk (parse-chunk chunk)]
-               (if (empty? chunk)
-                 decoded
-                 (into decoded chunk))))
-      decoded)))
+(defn next-chunk [stream]
+  (let [chunk (parse-header stream)]
+    (when-not (empty? chunk)
+      (if-let [chunk (parse-chunk chunk)]
+        (cons chunk
+              (lazy-seq (next-chunk stream)))
+        (next-chunk stream)))))
 
 (defn- open-file [file]
-  (with-open [stream (input-stream file)]
-    (parse-stream stream)))
+  (let [stream (input-stream file)]
+    (next-chunk stream)))
 
 (defn -main []
   (reduce #(concat % %2) (map open-file pbf-files)))
