@@ -136,16 +136,15 @@
         block (blob->block blob type)
         {:keys [primitivegroup]} block]
     (when primitivegroup
-      (loop [[group & groups] primitivegroup
-             decoded '()]
-        (if group
-          (recur groups (conj decoded (parse-group group block)))
-          decoded)))))
+      (reduce #(if %2
+                 (conj % (parse-group %2 block))
+                 %)
+              '() primitivegroup))))
 
 (defn decode-pbf [stream]
   (let [chunk (decode-chunk stream)]
     (when-not (empty? chunk)
       (if-let [chunk (parse-chunk chunk)]
-        (cons chunk
+        (concat chunk
               (lazy-seq (decode-pbf stream)))
         (decode-pbf stream)))))
