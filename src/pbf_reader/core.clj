@@ -11,10 +11,11 @@
 
 ;; All credit for this function goes to pingles
 (defn- bytes->int [bytes]
-  (reduce + 0 (map #(bit-shift-left (bit-and (nth bytes %)
-                                             0xFF)
-                                    (* (- 4 1 %) 8))
-                   (range 0 4))))
+  (when bytes
+    (reduce + 0 (map #(bit-shift-left (bit-and (nth bytes %)
+                                               0xFF)
+                                      (* (- 4 1 %) 8))
+                     (range 0 4)))))
 
 (defn- fill-bytes! [stream bytes]
   (let [count-bytes (count bytes)
