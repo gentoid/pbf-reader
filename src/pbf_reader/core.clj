@@ -67,37 +67,24 @@
 
 (defn- decode-tags [keys vals strings]
   ;; which is faster?
-  #_(into {} (map #(vector % %2) keys vals))
+  #_(into {} (map #(vector % %2) (map strings keys) (map strings vals)))
   (apply hash-map (interleave (map strings keys) (map strings vals))))
 
 (defn- decode-refs [refs]
-  (loop [decoded-refs []
-         base 0
-         rs refs]
-    (if rs
-      (let [[r & rs-rest] rs
-            ref (+ base r)]
-        (recur (conj decoded-refs ref) ref rs-rest))
-      decoded-refs)))
-
-(defn- decode-rel-refs [role-sids member-ids types strings]
-  (loop [r-sids role-sids
-         m-ids member-ids
-         ts types
-         base-m-id 0
-         refs []]
-    (if ts
-      (let [[r & rs-rest] r-sids
-            [m & ms-rest] m-ids
-            [t & ts-rest] ts
-            m-id (+ base-m-id m)]
-        (recur rs-rest ms-rest ts-rest m-id (conj refs {:role (get strings r) :type t :id m-id})))
-      refs)))
+  (:decoded (reduce #(let [ref (+ (:base %) %2)]
+                      {:base ref :decoded (conj (:decoded %) ref)})
+                    {:base 0 :decoded []} refs)))
 
 (defn- decode-delta [s]
-  (reduce #(if (vector? %)
-            (conj % (+ %2 (peek %)))
-            (conj [%] (+ %2 %))) s))
+  (reduce #(conj % (+ %2 (peek %)))
+          (vector (first s))
+          (rest s)))
+
+(defn- decode-rel-refs [role-sids member-ids types strings]
+  (map #(hash-map :role (strings %) :id %2 :type %3)
+       role-sids
+       (decode-delta member-ids)
+       types))
 
 (defn- parse-dense [dense strings]
   (let [{:keys [denseinfo keys-vals]} dense
@@ -120,7 +107,6 @@
 (defn parse-ways [ways strings]
   (let [parse-way (fn [way]
                     (let [{:keys [id keys vals refs info]} way
-                          {:keys [timestamp changeset version uid user-sid]} info
                           refs (decode-delta refs)]
                       (into {} (concat (parse-info info strings)
                                        {:id id :tags (decode-tags keys vals strings) :refs refs}))))]
@@ -155,10 +141,10 @@
           (recur groups (conj decoded (parse-group group block)))
           decoded)))))
 
-(defn next-chunk [stream]
+(defn decode-pbf [stream]
   (let [chunk (decode-chunk stream)]
     (when-not (empty? chunk)
       (if-let [chunk (parse-chunk chunk)]
         (cons chunk
-              (lazy-seq (next-chunk stream)))
-        (next-chunk stream)))))
+              (lazy-seq (decode-pbf stream)))
+        (decode-pbf stream)))))
