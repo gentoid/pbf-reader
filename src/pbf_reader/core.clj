@@ -1,13 +1,8 @@
 (ns pbf-reader.core
   (:import (crosby.binary Osmformat$HeaderBlock Fileformat$BlobHeader Fileformat$Blob Osmformat$PrimitiveBlock)
            (java.util.zip Inflater))
-  (:use [clojure.java.io :only [input-stream]]
-        [clj-configurator.core :only [defconfig]])
+  (:use [clojure.java.io :only [input-stream]])
   (:require [flatland.protobuf.core :as buf]))
-
-;; default config
-(defconfig settings
-  :defaults {:pbf-dir "/home/viktor/disks/data1/download/pbf/2/"})
 
 (def BlobHeader     (buf/protodef Fileformat$BlobHeader))
 (def Blob           (buf/protodef Fileformat$Blob))
@@ -15,21 +10,11 @@
 (def PrimitiveBlock (buf/protodef Osmformat$PrimitiveBlock))
 
 ;; All credit for this function goes to pingles
-(defn- bytes->int
-  ([bytes]
-   (bytes->int bytes 0))
-  ([bytes offset]
-   (reduce + 0 (map (fn [i]
-                      (let [shift (* (- 4 1 i) 8)]
-                        (bit-shift-left (bit-and (nth bytes (+ i offset))
-                                                 0xFF)
-                                        shift)))
-                    (range 0 4)))))
-
-(def pbf-files
-  (filter
-    #(re-find #"\.osm\.pbf$" (.getName %))
-    (file-seq (clojure.java.io/file (:pbf-dir settings)))))
+(defn- bytes->int [bytes]
+  (reduce + 0 (map #(bit-shift-left (bit-and (nth bytes %)
+                                             0xFF)
+                                    (* (- 4 1 %) 8))
+                   (range 0 4))))
 
 (defn- fill-bytes! [stream bytes]
   (let [count-bytes (count bytes)
@@ -41,13 +26,13 @@
     (when (fill-bytes! stream bytes)
       bytes)))
 
-(defn- parse-header [stream]
+(defn- decode-chunk [stream]
   ;; TODO: check size of blobs
-  (when-let       [header-size (get-bytes stream 4)]
-    (when-let     [header      (get-bytes stream (bytes->int header-size))]
-      (let        [blob-header (buf/protobuf-load BlobHeader header)]
-        (when-let [blob-size   (get-bytes stream (:datasize blob-header))]
-          {:blob-header blob-header :blob (buf/protobuf-load Blob blob-size)})))))
+  (when-let       [header-size  (bytes->int (get-bytes stream 4))]
+    (when-let     [header-bytes (get-bytes stream header-size)]
+      (let        [blob-header  (buf/protobuf-load BlobHeader header-bytes)]
+        (when-let [blob-bytes   (get-bytes stream (:datasize blob-header))]
+          {:blob-header blob-header :blob (buf/protobuf-load Blob blob-bytes)})))))
 
 (defn- zlib-unpack [input size]
   (let [inflater (Inflater.)
@@ -67,14 +52,9 @@
 
 (defn- string-table->strings [byte-strings]
   (when byte-strings
-    (loop [[first & rest] byte-strings
-           init-strings []]
-      (let [strings (conj init-strings (.toStringUtf8 first))]
-        (if rest
-          (recur rest strings)
-          strings)))))
+    (reduce #(conj % (.toStringUtf8 %2)) [] byte-strings)))
 
-(defn- decode-lat-lon [value offset granularity]
+(defn- calculate-lat-lon [value offset granularity]
   (* 0.000000001 (+ offset (* granularity value))))
 
 (defn decode-dense-tags [keys-vals strings]
@@ -86,14 +66,9 @@
       :else tags)))
 
 (defn- decode-tags [keys vals strings]
-  (loop [tags {}
-         ks keys
-         vs vals]
-    (if ks
-      (let [[k & ks-rest] ks
-            [v & vs-rest] vs]
-        (recur (assoc tags (get strings k) (get strings v)) ks-rest vs-rest))
-      tags)))
+  ;; which is faster?
+  #_(into {} (map #(vector % %2) keys vals))
+  (apply hash-map (interleave (map strings keys) (map strings vals))))
 
 (defn- decode-refs [refs]
   (loop [decoded-refs []
@@ -181,16 +156,9 @@
           decoded)))))
 
 (defn next-chunk [stream]
-  (let [chunk (parse-header stream)]
+  (let [chunk (decode-chunk stream)]
     (when-not (empty? chunk)
       (if-let [chunk (parse-chunk chunk)]
         (cons chunk
               (lazy-seq (next-chunk stream)))
         (next-chunk stream)))))
-
-(defn- open-file [file]
-  (let [stream (input-stream file)]
-    (next-chunk stream)))
-
-(defn -main []
-  (reduce #(concat % %2) (map open-file pbf-files)))
