@@ -58,7 +58,7 @@
 (defn- calculate-lat-lon [value offset granularity]
   (* 0.000000001 (+ offset (* granularity value))))
 
-(defn decode-dense-tags [keys-vals strings]
+(defn- decode-dense-tags [keys-vals strings]
   (loop [[k v & keys-vals] keys-vals
          tags '()]
     (cond
@@ -105,7 +105,7 @@
   (let [{:keys [version timestamp changeset uid user-sid]} info]
     {:user (strings user-sid) :version version :changeset changeset :timestamp timestamp :uid uid}))
 
-(defn parse-ways [ways strings]
+(defn- parse-ways [ways strings]
   (let [parse-way (fn [way]
                     (let [{:keys [id keys vals refs info]} way
                           refs (decode-delta refs)]
